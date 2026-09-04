@@ -3,7 +3,7 @@ name: Daily Codes to Discord
 on:
   workflow_dispatch:
   schedule:
-    - cron: "10 0 * * *"  # 08:10 Beijing time (00:10 UTC)
+    - cron: "10 0 * * *"  # 08:10 Beijing time
 
 jobs:
   post:
@@ -31,83 +31,155 @@ jobs:
           }
           
           url = "https://deltaforcetools.gg/"
-          
-          max_retries = 3
           codes = {}
           
-          for attempt in range(max_retries):
+          for attempt in range(3):
               try:
                   response = requests.get(url, headers=headers, timeout=30)
-                  html_content = response.text
+                  html = response.text
+                  print(f"Attempt {attempt+1}: HTML length={len(html)}")
                   
-                  idx = html_content.find('"2e:')
-                  end_idx = html_content.find('])', idx)
-                  
-                  if idx != -1 and end_idx != -1:
-                      section = html_content[idx:end_idx]
+                  # Method 1: JSON data (find "2e:" section)
+                  idx = html.find('"2e:')
+                  if idx != -1:
+                      end_idx = html.find('])', idx)
+                      section = html[idx:end_idx]
                       unescaped = section.replace('\\"', '"')
-                      
-                      codes_list = re.findall(r'"pwd":"(\d{4})"', unescaped)
-                      locs_list = re.findall(r'"en":"([^"]+)"', unescaped)
-                      pics_list = re.findall(r'"pic":"([^"]+)"', unescaped)
-                      
-                      codes = {}
-                      for i, loc in enumerate(locs_list):
-                          if i < len(codes_list):
-                              pic_url = pics_list[i] if i < len(pics_list) else ""
-                              codes[loc] = {"code": codes_list[i], "pic": pic_url}
-                      
-                      if len(codes) >= 5:
-                          print(f"Successfully fetched {len(codes)} location codes")
-                          break
-                      else:
-                          print(f"Attempt {attempt+1}: Only got {len(codes)} codes, retrying...")
-                          codes = {}
-                          time.sleep(30)
+                      pwd_list = re.findall(r'"pwd":"(\d{4})"', unescaped)
+                      loc_list = re.findall(r'"en":"([^"]+)"', unescaped)
+                      pic_list = re.findall(r'"pic":"([^"]+)"', unescaped)
+                      for i, loc in enumerate(loc_list):
+                          if i < len(pwd_list):
+                              pic = pic_list[i] if i < len(pic_list) else ""
+                              codes[loc] = {"code": pwd_list[i], "pic": pic}
+                      print(f"  Method 1 (JSON): {len(codes)} codes")
+                  
+                  # Method 2: HTML cards (Daily Codes section)
+                  if len(codes) < 5:
+                      daily_idx = html.find("Daily Codes")
+                      if daily_idx != -1:
+                          end_idx = html.find("Auction", daily_idx)
+                          if end_idx == -1:
+                              end_idx = daily_idx + 10000
+                          section = html[daily_idx:end_idx]
+                          cards = section.split("bg-full-cover")
+                          for card in cards[1:]:
+                              img_m = re.search(r"background-image:url\(([^)]+)\)", card)
+                              img = f"https://deltaforcetools.gg{img_m.group(1)}" if img_m else ""
+                              name_m = re.search(r'font-normal">([^<]+)</div>', card)
+                              name = name_m.group(1).strip() if name_m else "Unknown"
+                              code_m = re.search(r'font-bold">(\d{4})</div>', card)
+                              c = code_m.group(1) if code_m else "0000"
+                              codes[name] = {"code": c, "pic": img}
+                          print(f"  Method 2 (HTML cards): {len(codes)} codes")
+                  
+                  # Method 3: Generic regex search for 4-digit codes near location names
+                  if len(codes) < 5:
+                      known_locs = ["Dam", "Layali", "Brakkesh", "Space City", "Tide Prison", 
+                                    "Black Pan", "Harbor", "Port", "Airport", "Quarry"]
+                      for loc in known_locs:
+                          loc_idx = html.find(loc)
+                          if loc_idx != -1:
+                              nearby = html[loc_idx:loc_idx+500]
+                              code_m = re.search(r'(\d{4})', nearby)
+                              if code_m:
+                                  codes[loc] = {"code": code_m.group(1), "pic": ""}
+                      print(f"  Method 3 (known locations): {len(codes)} codes")
+                  
+                  # Method 4: Find all 4-digit numbers in JSON-like structures
+                  if len(codes) < 5:
+                      all_pwd = re.findall(r'"pwd"\s*:\s*"?(\d{4})"?', html)
+                      all_en = re.findall(r'"en"\s*:\s*"?([A-Za-z\s]+)"?', html)
+                      for i, en in enumerate(all_en):
+                          if i < len(all_pwd) and len(en) > 2:
+                              codes[en.strip()] = {"code": all_pwd[i], "pic": ""}
+                      print(f"  Method 4 (regex pwd/en): {len(codes)} codes")
+                  
+                  # Method 5: Broad search for code patterns
+                  if len(codes) < 5:
+                      # Find patterns like code:"1234" or "code":"1234"
+                      code_matches = re.findall(r'(?:code|pwd|password)["\']?\s*:\s*["\']?(\d{4})', html, re.I)
+                      # Find location names near those codes
+                      all_matches = re.finditer(r'(?:code|pwd|password)["\']?\s*:\s*["\']?(\d{4})', html, re.I)
+                      loc_matches = list(re.finditer(r'(?:en|name|loc|location)["\']?\s*:\s*["\']([A-Za-z\s]+)', html, re.I))
+                      for i, m in enumerate(all_matches):
+                          code = m.group(1)
+                          loc = loc_matches[i].group(1).strip() if i < len(loc_matches) else f"Location_{i+1}"
+                          codes[loc] = {"code": code, "pic": ""}
+                      print(f"  Method 5 (broad regex): {len(codes)} codes")
+                  
+                  if len(codes) >= 5:
+                      print(f"Success! {len(codes)} codes found")
+                      break
                   else:
-                      print(f"Attempt {attempt+1}: Could not find codes section")
-                      time.sleep(30)
+                      print(f"  Got {len(codes)} codes, retrying...")
+                      # Save HTML for debugging on first attempt
+                      if attempt == 0:
+                          with open("/tmp/debug_html.txt", "w") as f:
+                              f.write(html[:50000])
+                          print(f"  Saved debug HTML (first 50k chars)")
+                      time.sleep(10)
               except Exception as e:
-                  print(f"Attempt {attempt+1}: Error - {e}")
-                  time.sleep(30)
+                  print(f"  Error: {e}")
+                  time.sleep(10)
+          
+          # Debug: print found codes
+          print(f"\nFinal codes count: {len(codes)}")
+          for loc, data in codes.items():
+              print(f"  {loc}: {data['code']}")
           
           Beijing_tz = timezone(timedelta(hours=8))
-          now_utc = datetime.now(timezone.utc)
-          now_beijing = now_utc.astimezone(Beijing_tz)
+          now_beijing = datetime.now(timezone.utc).astimezone(Beijing_tz)
           today = now_beijing.strftime("%Y-%m-%d")
           
           webhook_url = os.environ.get("DISCORD_WEBHOOK")
           
-          embeds = []
-          for loc, data in codes.items():
-              embed = {
-                  "title": f"\U0001f4cd {loc}",
-                  "description": f"**Code:** `{data['code']}`",
-                  "color": 5814783,
-                  "image": {"url": data['pic']} if data['pic'] else None,
-                  "footer": {"text": f"deltaforcetools.gg • {today}"}
+          if not codes:
+              print("WARNING: No codes found! Posting notification only.")
+              payload = {
+                  "content": f"**Delta Force Daily Codes - {today}**\n\nCould not fetch codes today. Check https://deltaforcetools.gg/ manually."
               }
-              embed = {k: v for k, v in embed.items() if v is not None}
-              embeds.append(embed)
-          
-          # BUFF promo embed
-          promo_embed = {
-              "title": "\U0001f3b0 Need Delta Coins?",
-              "description": "Top up via our official partner BUFF & get community rewards:\n\U0001f517 https://buffbuff.com/top-up/delta-force?utm_source=dftgg&utm_media=dftgg\n\n\U0001f4b8 Details in #\U0001f381\u30fbmember-perks",
-              "color": 0xFFD700,
-              "footer": {"text": "BUFF x Delta Force Tools • Official Partner"}
-          }
-          embeds.append(promo_embed)
-          
-          payload = {
-              "content": f"@door code notifications\n\n**\U0001f3ae Delta Force Daily Codes - {today}**",
-              "embeds": embeds
-          }
-          
-          response = requests.post(webhook_url, json=payload, timeout=30)
-          print(f"Discord status: {response.status_code}")
-          if response.status_code in [200, 204]:
-              print("Successfully posted to Discord!")
+              response = requests.post(webhook_url, json=payload, timeout=30)
+              print(f"Notification posted: {response.status_code}")
           else:
-              print(f"Failed: {response.text}")
+              embeds = []
+              for loc, data in codes.items():
+                  embed = {
+                      "title": f"\U0001f4cd {loc}",
+                      "description": f"**Code:** `{data['code']}`",
+                      "color": 5814783,
+                      "footer": {"text": f"deltaforcetools.gg • {today}"}
+                  }
+                  if data.get("pic"):
+                      embed["image"] = {"url": data["pic"]}
+                  embeds.append(embed)
+              
+              # BUFF promo embed
+              embeds.append({
+                  "title": "\U0001f3b0 Need Delta Coins?",
+                  "description": "Top up via our official partner BUFF & get community rewards:\n\U0001f517 https://buffbuff.com/top-up/delta-force?utm_source=dftgg&utm_media=dftgg\n\n\U0001f4b8 Details in #\U0001f381\u30fbmember-perks",
+                  "color": 0xFFD700,
+                  "footer": {"text": "BUFF x Delta Force Tools • Official Partner"}
+              })
+              
+              payload = {
+                  "content": f"@door code notifications\n\n**\U0001f3ae Delta Force Daily Codes - {today}**",
+                  "embeds": embeds
+              }
+              
+              response = requests.post(webhook_url, json=payload, timeout=30)
+              print(f"Discord status: {response.status_code}")
+              if response.status_code in [200, 204]:
+                  print("Successfully posted to Discord!")
+              else:
+                  print(f"Failed: {response.text}")
           EOF
+      
+      - name: Upload debug HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-html
+          path: /tmp/debug_html.txt
+          retention-days: 7
+          if-no-files-found: ignore
